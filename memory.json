@@ -1,0 +1,14 @@
+{
+  "facts": {
+    "my name": "amit",
+    "address": {
+      "line1": "123, Main street",
+      "line2": "Main building",
+      "city": "Wood dale",
+      "state": "IL",
+      "Country": "USA"
+    },
+    "mobile": "+91 13567 24545",
+    "about_me": "**About You**\nYou\u00e2\u20ac\u2122re a frontend developer who has been learning web development seriously for the past 2 years. You know React, Tailwind CSS, Node.js, SASS, and you\u00e2\u20ac\u2122ve worked with MongoDB and Supabase. You\u00e2\u20ac\u2122ve also learned C, C++, PHP, and you\u00e2\u20ac\u2122re good with design tools like Photoshop, Figma, and Illustrator. You completed your BCA in 2022 and have also done a web developer internship using the MERN stack. You\u00e2\u20ac\u2122re currently looking for a job.\n\n---\n\n**Your Strengths**\n\n* You\u00e2\u20ac\u2122re a fast learner and like to understand how things work.\n* You build apps with practical thinking \u00e2\u20ac\u201d especially ones that solve real problems.\n* You ask the right questions and prefer clear, step-by-step guidance.\n* You\u00e2\u20ac\u2122re consistent, and you actually finish what you start.\n* You balance design and development skills well.\n\n---\n\n**Your Weaknesses**\n\n* Sometimes you overthink things, especially small details.\n* You often doubt your own decisions, even when they\u00e2\u20ac\u2122re right.\n* You focus more on building than showing your work (portfolio, social proof).\n* You may avoid applying to jobs unless everything feels \"perfect.\"\n\n---\n\n**Other Traits**\n\n* You\u00e2\u20ac\u2122re not afraid to experiment and explore new tech.\n* You want your projects to look modern, clean, and futuristic.\n* You prefer working with structure, but you\u00e2\u20ac\u2122re flexible with small imperfections.there is ravindra he is like my friend"
+  }
+}
