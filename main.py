@@ -14,11 +14,18 @@ from playsound import playsound
 import io
 import pygame
 import datetime
+import speech_recognition as sr
+import threading
+import time
 
 # --- Config ---
 MEMORY_FILE = "memory.json"
 MODEL = "gpt-4o"  # or "gpt-3.5-turbo" if you don't have GPT-4 access
 env = pydotenv.Environment()
+
+# Global flag to control speech interruption
+speaking = False
+should_stop = False
 
 # --- gemni Chat Function ---
 client = genai.Client(api_key=env.get('GEMINI_API_KEY'))
@@ -54,23 +61,101 @@ def add_to_memory_conversation(memory: Dict, role: str, content: str):
     save_memory(memory)
     return memory
 
+# --- Speech Recognition ---
+def listen(timeout=5):
+    """Listen for speech and convert to text"""
+    recognizer = sr.Recognizer()
+    with sr.Microphone() as source:
+        print("Listening...")
+        # Adjust for ambient noise
+        recognizer.adjust_for_ambient_noise(source, duration=0.5)
+        try:
+            audio = recognizer.listen(source, timeout=timeout, phrase_time_limit=10)
+            print("Processing speech...")
+            # Use Google's speech recognition
+            text = recognizer.recognize_google(audio)
+            print(f"You said: {text}")
+            return text
+        except sr.UnknownValueError:
+            print("Sorry, I didn't catch that.")
+            return None
+        except sr.RequestError:
+            print("Speech recognition service unavailable.")
+            return None
+        except Exception as e:
+            print(f"Error listening: {e}")
+            return None
+
+def background_listening():
+    """Background thread to listen for 'stop' command while speaking"""
+    global should_stop
+    recognizer = sr.Recognizer()
+    
+    while speaking:
+        try:
+            with sr.Microphone() as source:
+                # We need quick response, so minimal adjustments
+                recognizer.adjust_for_ambient_noise(source, duration=0.2)
+                audio = recognizer.listen(source, phrase_time_limit=2, timeout=1)
+                try:
+                    text = recognizer.recognize_google(audio).lower()
+                    print(f"Interrupt detected: {text}")
+                    if "stop" in text:
+                        should_stop = True
+                        print("Stopping speech...")
+                        break
+                except:
+                    continue
+        except:
+            time.sleep(0.5)  # Brief pause before trying again
+            continue
+
 # --- Text-to-Speech ---
 def speak(text):
+    global speaking, should_stop
+    
     try:
+        print("Jarvis:", text)
+        
+        # Set flags for interruption handling
+        speaking = True
+        should_stop = False
+        
+        # Start background listening for "stop" commands
+        listener_thread = threading.Thread(target=background_listening)
+        listener_thread.daemon = True
+        listener_thread.start()
+        
         # Create gTTS audio
         tts = gTTS(text=text, lang='en')
         fp = io.BytesIO()
         tts.write_to_fp(fp)
-
-        # Play the audio using pygame (no file saved)
+        
+        # Split text into sentences for chunked playback
+        sentences = re.split(r'(?<=[.!?])\s+', text)
+        
+        # Play audio in chunks to allow interruption
         fp.seek(0)
         pygame.mixer.init()
         pygame.mixer.music.load(fp)
         pygame.mixer.music.play()
         
-        while pygame.mixer.music.get_busy():
-            continue
+        # Monitor for stop requests while playing
+        while pygame.mixer.music.get_busy() and not should_stop:
+            pygame.time.Clock().tick(10)  # Small delay to reduce CPU usage
+            
+        # Stop audio if requested
+        if should_stop:
+            pygame.mixer.music.stop()
+            print("Speech interrupted")
+        
+        # Reset flags
+        speaking = False
+        should_stop = False
+        
     except Exception as e:
+        speaking = False
+        should_stop = False
         print("Speech Error:", e)
 
 def get_ai_response(q: str, memory: Dict) -> Union[str | None]:
@@ -118,7 +203,8 @@ def restart():
 
 # --- Main Loop ---
 def main():
-    print("Hello! I'm Jarvis. How can I help you?")
+    print("Starting Jarvis voice assistant...")
+    speak("Hello! I'm Jarvis. How can I help you?")
     memory = load_memory()
     
     # Add initial greeting to memory conversation if it's empty
@@ -132,13 +218,18 @@ def main():
         keyboard.add_hotkey('ctrl+r', restart)  # Windows/Linux
 
     while True:
-        user_input = input("You: ")
+        # Get voice input
+        user_input = listen()
+        
+        if not user_input:
+            speak("I didn't catch that. Could you repeat?")
+            continue
         
         # Add user input to memory conversations
         memory = add_to_memory_conversation(memory, "user", user_input)
         
-        if user_input.lower() in ["exit", "quit"]:
-            print("Goodbye!")
+        if any(cmd in user_input.lower() for cmd in ["exit", "quit", "bye", "goodbye"]):
+            speak("Goodbye!")
             # Add farewell to memory conversations
             add_to_memory_conversation(memory, "jarvis", "Goodbye!")
             break
@@ -147,10 +238,13 @@ def main():
         if user_input.lower().startswith("remember"):
             try:
                 _, fact = user_input.split("remember", 1)
-                key, value = fact.strip().split(" is ", 1)
-                memory["facts"][key.strip()] = value.strip()
-                save_memory(memory)
-                response = f"Okay, I'll remember your {key.strip()} is {value.strip()}."
+                if " is " in fact:
+                    key, value = fact.strip().split(" is ", 1)
+                    memory["facts"][key.strip()] = value.strip()
+                    save_memory(memory)
+                    response = f"Okay, I'll remember your {key.strip()} is {value.strip()}."
+                else:
+                    response = "Sorry, I couldn't understand what to remember. Please use 'Remember my [fact] is [value]'."
             except Exception:
                 response = "Sorry, I couldn't understand what to remember. Please use 'Remember my [fact] is [value]'."
         # Memory: Recall facts if user says "What is my X?"
@@ -207,12 +301,12 @@ def main():
                             continue
                 
                 if relevant_conversations:
-                    response = f"Here's what was said during that time:\n" + "\n".join(relevant_conversations[-5:])
+                    response = f"Here's what was said during that time: " + ". ".join(relevant_conversations[-5:])
                 else:
                     response = f"I couldn't find any conversations during that timeframe."
             else:
                 # If no specific time found, return the last few conversations
-                response = "Here are the recent messages:\n" + "\n".join([f"{entry['role']}: {entry['content']}" for entry in memory["conversations"][-5:]])
+                response = "Here are the recent messages: " + ". ".join([f"{entry['role']}: {entry['content']}" for entry in memory["conversations"][-5:]])
         # Otherwise, use Gemini
         else:
             response = get_ai_response(user_input, memory)
@@ -220,8 +314,11 @@ def main():
         # Add Jarvis response to memory conversations
         memory = add_to_memory_conversation(memory, "jarvis", response)
         
-        print("Jarvis:", response)
-        speak(re.sub(r'\W', '', response))
+        # Speak the response (with interruption capability)
+        speak(response)
+        
+        # Add a small pause before listening again
+        time.sleep(0.5)
 
 if __name__ == "__main__":
     try:
