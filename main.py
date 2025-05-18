@@ -18,14 +18,15 @@ import speech_recognition as sr
 import threading
 import time
 
+
 # --- Config ---
 MEMORY_FILE = "memory.json"
 MODEL = "gpt-4o"
 WAKE_WORDS = ["jarvis", "sir", "hey jarvis"]
 SLEEP_PHRASES = ["go to sleep", "that's all", "goodbye", "exit", "stop"]  # Added "stop" here
 STOP_PHRASES = ["stop", "pause", "quiet"]  # Phrases that just stop current speech
-LISTEN_TIMEOUT = 8
-INACTIVITY_TIMEOUT = 15
+LISTEN_TIMEOUT = 10
+INACTIVITY_TIMEOUT = 10
 env = pydotenv.Environment()
 
 # Global flags
@@ -34,6 +35,11 @@ should_stop = False
 active = False  # Conversation active state
 waiting_for_response = False  # Whether we're expecting user input
 last_interaction = 0  # Time of last interaction
+
+engine = pyttsx3.init()
+engine.setProperty('rate', 180)  # Speed up voice
+engine.setProperty('voice', engine.getProperty('voices')[0].id)
+
 
 # --- gemini Chat Function ---
 client = genai.Client(api_key=env.get('GEMINI_API_KEY'))
@@ -54,8 +60,10 @@ def load_memory():
     return {"facts": {}, "conversations": []}
 
 def save_memory(memory):
-    with open(MEMORY_FILE, "w") as f:
-        json.dump(memory, f)
+    if len(memory["conversations"]) % 3 == 0:
+        with open(MEMORY_FILE, "w") as f:
+            json.dump(memory, f)
+
 
 def add_to_memory_conversation(memory: Dict, role: str, content: str):
     timestamp = datetime.datetime.now().isoformat()
@@ -71,24 +79,17 @@ def add_to_memory_conversation(memory: Dict, role: str, content: str):
 def listen(timeout=3, phrase_limit=5):
     recognizer = sr.Recognizer()
     with sr.Microphone() as source:
-        recognizer.adjust_for_ambient_noise(source, duration=0.5)
+        # Remove or reduce adjustment time
+        recognizer.adjust_for_ambient_noise(source, duration=0.2)
         try:
             audio = recognizer.listen(source, timeout=timeout, phrase_time_limit=phrase_limit)
-            text = recognizer.recognize_google(audio).lower()
-            print(f"You said: {text}")
-            return text
-        except sr.UnknownValueError:
-            return None
-        except sr.RequestError:
-            print("Speech recognition service unavailable.")
-            return None
-        except Exception as e:
+            return recognizer.recognize_google(audio).lower()
+        except:
             return None
 
 def background_listening():
-    global should_stop
+    global should_stop, active, waiting_for_response
     recognizer = sr.Recognizer()
-    
     while speaking:
         try:
             with sr.Microphone() as source:
@@ -96,8 +97,12 @@ def background_listening():
                 audio = recognizer.listen(source, phrase_time_limit=2, timeout=1)
                 try:
                     text = recognizer.recognize_google(audio).lower()
-                    if "stop" in text:
+                    if "stop" in text or "pause" in text or "quiet" in text:
                         should_stop = True
+                        engine.stop()
+                        active = False
+                        waiting_for_response = False
+                        print("Conversation stopped by user.")
                         break
                 except:
                     continue
@@ -105,51 +110,40 @@ def background_listening():
             time.sleep(0.5)
             continue
 
-# --- Text-to-Speech ---
 def speak(text):
     global speaking, should_stop, waiting_for_response
-    
     try:
         print("Jarvis:", text)
         speaking = True
         should_stop = False
-        
         listener_thread = threading.Thread(target=background_listening)
         listener_thread.daemon = True
         listener_thread.start()
         
-        tts = gTTS(text=text, lang='en')
-        fp = io.BytesIO()
-        tts.write_to_fp(fp)
-        
-        fp.seek(0)
-        pygame.mixer.init()
-        pygame.mixer.music.load(fp)
-        pygame.mixer.music.play()
-        
-        while pygame.mixer.music.get_busy() and not should_stop:
-            pygame.time.Clock().tick(10)
-            
-        if should_stop:
-            pygame.mixer.music.stop()
-            print("Speech stopped by user")
-            return False  # Indicate speech was interrupted
+        engine.say(text)
+        engine.runAndWait()
         
         speaking = False
-        should_stop = False
         
+        if should_stop:
+            should_stop = False
+            print("Speech interrupted by stop command.")
+            return False
+
         if active:
             waiting_for_response = True
         return True
-        
     except Exception as e:
+        print("Speech Error:", e)
         speaking = False
         should_stop = False
-        print("Speech Error:", e)
         return False
+
+
+
 def get_ai_response(q: str, memory: Dict) -> Union[str | None]:
     conversation_context = ""
-    for entry in memory["conversations"][-10:]:
+    for entry in memory["conversations"]:
         timestamp = entry.get("timestamp", "")
         time_str = ""
         if timestamp:
@@ -185,12 +179,15 @@ def restart():
     os.execv(python, [python] + sys.argv)
 
 # --- Main Loop ---
+# ... [imports and config remain unchanged] ...
+
+# --- Main Loop ---
 def main():
     global active, waiting_for_response, last_interaction
-    
+
     print("Jarvis is running in background. Say 'Jarvis' or 'Sir' to activate.")
     memory = load_memory()
-    
+
     if platform.platform().lower() == "darwin":
         keyboard.add_hotkey('cmd+r', restart)
     else:
@@ -198,31 +195,26 @@ def main():
 
     while True:
         current_time = time.time()
-        
-        # Check for inactivity timeout
-        if active and (current_time - last_interaction > INACTIVITY_TIMEOUT):
-            if speak("I'll go to sleep now. Say 'Jarvis' when you need me."):
-                active = False
-                waiting_for_response = False
-            continue
-            
+
         # Listen with appropriate timeout
         if waiting_for_response:
             user_input = listen(timeout=LISTEN_TIMEOUT, phrase_limit=10)
         else:
-            user_input = listen(timeout=2, phrase_limit=5)
-        
+            user_input = listen(timeout=0.5, phrase_limit=3)
+
         if user_input:
             last_interaction = current_time
-            
-            # Handle stop commands first
+
+            # --- Handle stop commands first ---
             if any(phrase in user_input.lower() for phrase in STOP_PHRASES):
                 should_stop = True
                 if active:
                     speak("Pausing as requested.")
-                    waiting_for_response = True
+                    # --- Conversation is now stopped: go to standby ---
+                    active = False
+                    waiting_for_response = False
                 continue
-                
+
             # Check for wake word if not active
             if not active and any(wake_word in user_input.lower() for wake_word in WAKE_WORDS):
                 active = True
@@ -230,7 +222,7 @@ def main():
                 speak("Yes sir?")
                 memory = add_to_memory_conversation(memory, "jarvis", "Yes sir?")
                 continue
-                
+
             # If active, process all input
             if active:
                 # Check for sleep/deactivation phrases
@@ -240,7 +232,7 @@ def main():
                         active = False
                         waiting_for_response = False
                     continue
-                    
+
                 # Process memory commands
                 if user_input.lower().startswith("remember"):
                     try:
@@ -254,13 +246,13 @@ def main():
                             continue
                     except Exception:
                         pass
-                        
+
                 # Process normal command
                 memory = add_to_memory_conversation(memory, "user", user_input)
                 response = get_ai_response(user_input, memory)
                 memory = add_to_memory_conversation(memory, "jarvis", response)
                 speak(response)
-                
+
         elif waiting_for_response:
             if time.time() - last_interaction < INACTIVITY_TIMEOUT/2:
                 continue
