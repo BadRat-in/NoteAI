@@ -24,3 +24,7 @@ memory.json
 .vscode/
 .idea/
 *.swp
+
+.env
+memory.json
+
