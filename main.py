@@ -192,10 +192,8 @@ def clean_response(text):
     text = re.sub(r' +', ' ', text)
     return text.strip()
 
-
 def main():
-    global active, waiting_for_response, last_interaction
-    print("Jarvis is running in background. Say 'Jarvis'" )
+    print("Jarvis is always listening. Just speak your command.")
     memory = load_memory()
 
     if platform.platform().lower() == "darwin":
@@ -204,65 +202,34 @@ def main():
         keyboard.add_hotkey('ctrl+r', restart)
 
     while True:
-        current_time = time.time()
-
-        if waiting_for_response:
-            user_input = listen(timeout=LISTEN_TIMEOUT, phrase_limit=10)
-        else:
-            user_input = listen(timeout=0.5, phrase_limit=3)
-
+        user_input = listen(timeout=LISTEN_TIMEOUT, phrase_limit=10)
         if user_input:
             print("Recognized:", user_input)
-            last_interaction = current_time
+            memory = add_to_memory_conversation(memory, "user", user_input)
 
-            if any(phrase in user_input.lower() for phrase in STOP_PHRASES):
-                should_stop = True
-                if active:
-                    speak("Pausing as requested.")
-                    active = False
-                    waiting_for_response = False
+            # Handle stop/exit commands
+            if any(phrase in user_input.lower() for phrase in STOP_PHRASES + SLEEP_PHRASES):
+                speak("Pausing as requested. Say something to continue.")
                 continue
 
-            if not active and any(wake_word in user_input.lower() for wake_word in WAKE_WORDS):
-                active = True
-                waiting_for_response = True
-                speak("Yes sir?")
-                memory = add_to_memory_conversation(memory, "jarvis", "Yes sir?")
-                continue
+            # Handle 'remember' commands
+            if user_input.lower().startswith("remember"):
+                try:
+                    _, fact = user_input.split("remember", 1)
+                    if " is " in fact:
+                        key, value = fact.strip().split(" is ", 1)
+                        memory["facts"][key.strip()] = value.strip()
+                        save_memory(memory)
+                        speak(f"Remembered: {key.strip()} is {value.strip()}")
+                        continue
+                except Exception:
+                    pass
 
-            if active:
-                if any(phrase in user_input.lower() for phrase in SLEEP_PHRASES):
-                    if speak("Understood. I'm going to sleep now."):
-                        add_to_memory_conversation(memory, "jarvis", "Going to sleep.")
-                        active = False
-                        waiting_for_response = False
-                    continue
+            response = get_ai_response(user_input, memory)
+            response = clean_response(response)
+            memory = add_to_memory_conversation(memory, "jarvis", response)
+            speak(response)
 
-                if user_input.lower().startswith("remember"):
-                    try:
-                        _, fact = user_input.split("remember", 1)
-                        if " is " in fact:
-                            key, value = fact.strip().split(" is ", 1)
-                            memory["facts"][key.strip()] = value.strip()
-                            save_memory(memory)
-                            speak(f"Remembered: {key.strip()} is {value.strip()}")
-                            waiting_for_response = True
-                            continue
-                    except Exception:
-                        pass
-
-                memory = add_to_memory_conversation(memory, "user", user_input)
-                response = get_ai_response(user_input, memory)
-                response = clean_response(response)
-                memory = add_to_memory_conversation(memory, "jarvis", response)
-                speak(response)
-
-        elif waiting_for_response:
-            if time.time() - last_interaction < INACTIVITY_TIMEOUT/2:
-                continue
-            else:
-                if speak("I didn't catch that. I'll wait a bit longer..."):
-                    last_interaction = time.time()
 
 if __name__ == "__main__":
     try:
