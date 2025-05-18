@@ -18,13 +18,12 @@ import speech_recognition as sr
 import threading
 import time
 
-
 # --- Config ---
 MEMORY_FILE = "memory.json"
 MODEL = "gpt-4o"
-WAKE_WORDS = ["jarvis", "sir", "hey jarvis"]
-SLEEP_PHRASES = ["go to sleep", "that's all", "goodbye", "exit", "stop"]  # Added "stop" here
-STOP_PHRASES = ["stop", "pause", "quiet"]  # Phrases that just stop current speech
+WAKE_WORDS = ["jarvis"]
+SLEEP_PHRASES = ["go to sleep", "that's all", "goodbye", "exit", "stop"]
+STOP_PHRASES = ["stop", "pause", "quiet"]
 LISTEN_TIMEOUT = 10
 INACTIVITY_TIMEOUT = 10
 env = pydotenv.Environment()
@@ -32,14 +31,12 @@ env = pydotenv.Environment()
 # Global flags
 speaking = False
 should_stop = False
-active = False  # Conversation active state
-waiting_for_response = False  # Whether we're expecting user input
-last_interaction = 0  # Time of last interaction
+active = False
+waiting_for_response = False
+last_interaction = 0
 
 engine = pyttsx3.init()
-engine.setProperty('rate', 180)  # Speed up voice
-engine.setProperty('voice', engine.getProperty('voices')[0].id)
-
+engine.setProperty('rate', 180)
 
 # --- gemini Chat Function ---
 client = genai.Client(api_key=env.get('GEMINI_API_KEY'))
@@ -64,7 +61,6 @@ def save_memory(memory):
         with open(MEMORY_FILE, "w") as f:
             json.dump(memory, f)
 
-
 def add_to_memory_conversation(memory: Dict, role: str, content: str):
     timestamp = datetime.datetime.now().isoformat()
     memory["conversations"].append({
@@ -79,7 +75,6 @@ def add_to_memory_conversation(memory: Dict, role: str, content: str):
 def listen(timeout=3, phrase_limit=5):
     recognizer = sr.Recognizer()
     with sr.Microphone() as source:
-        # Remove or reduce adjustment time
         recognizer.adjust_for_ambient_noise(source, duration=0.2)
         try:
             audio = recognizer.listen(source, timeout=timeout, phrase_time_limit=phrase_limit)
@@ -140,8 +135,7 @@ def speak(text):
         return False
 
 
-
-def get_ai_response(q: str, memory: Dict) -> Union[str | None]:
+def get_ai_response(q: str, memory: Dict) -> Union[str, None]:
     conversation_context = ""
     for entry in memory["conversations"]:
         timestamp = entry.get("timestamp", "")
@@ -155,12 +149,11 @@ def get_ai_response(q: str, memory: Dict) -> Union[str | None]:
         conversation_context += f"{time_str}{entry['role']}: {entry['content']}\n"
     
     facts_context = json.dumps(memory["facts"]) if memory["facts"] else "{}"
-    
     system_instruction = """You are Jarvis, a helpful AI assistant. Respond conversationally when activated.
-    Keep responses concise but helpful. Maintain context from previous interactions.
-    If you ask a question and don't get a response, don't repeat yourself.
-    """
-    
+Keep responses concise but helpful. Maintain context from previous interactions.
+If you ask a question and don't get a response, don't repeat yourself.
+Do NOT return code blocks or code formatting. Only reply in plain, spoken English.
+"""
     full_context = system_instruction + "\n\nCONVERSATION HISTORY:\n" + conversation_context + "\n\nUSER FACTS:\n" + facts_context + "\n\nCurrent query: " + q
     
     response = client.models.generate_content(
@@ -172,20 +165,37 @@ def get_ai_response(q: str, memory: Dict) -> Union[str | None]:
     )
 
     return response.text
-    
+
 def restart():
     print("Restarting the program...")
     python = sys.executable
     os.execv(python, [python] + sys.argv)
 
-# --- Main Loop ---
-# ... [imports and config remain unchanged] ...
+import re
 
-# --- Main Loop ---
+def clean_response(text):
+    # Remove code blocks (triple backticks)
+    text = re.sub(r"``````", "", text)
+    # Remove inline code (single backticks)
+    text = re.sub(r"`([^`]*)`", r"\1", text)
+    # Remove tool_code or similar markers
+    text = re.sub(r"\btool_code\b", "", text, flags=re.IGNORECASE)
+    # Extract content inside print("...") or print('...')
+    match = re.search(r'print\(["\']([\s\S]+?)["\']\)', text)
+    if match:
+        text = match.group(1)
+    # Replace escaped newlines (\n) with space
+    text = text.replace("\\n", " ")
+    # Replace real newlines with space
+    text = re.sub(r'\s*\n\s*', ' ', text)
+    # Collapse multiple spaces
+    text = re.sub(r' +', ' ', text)
+    return text.strip()
+
+
 def main():
     global active, waiting_for_response, last_interaction
-
-    print("Jarvis is running in background. Say 'Jarvis' or 'Sir' to activate.")
+    print("Jarvis is running in background. Say 'Jarvis'" )
     memory = load_memory()
 
     if platform.platform().lower() == "darwin":
@@ -196,26 +206,23 @@ def main():
     while True:
         current_time = time.time()
 
-        # Listen with appropriate timeout
         if waiting_for_response:
             user_input = listen(timeout=LISTEN_TIMEOUT, phrase_limit=10)
         else:
             user_input = listen(timeout=0.5, phrase_limit=3)
 
         if user_input:
+            print("Recognized:", user_input)
             last_interaction = current_time
 
-            # --- Handle stop commands first ---
             if any(phrase in user_input.lower() for phrase in STOP_PHRASES):
                 should_stop = True
                 if active:
                     speak("Pausing as requested.")
-                    # --- Conversation is now stopped: go to standby ---
                     active = False
                     waiting_for_response = False
                 continue
 
-            # Check for wake word if not active
             if not active and any(wake_word in user_input.lower() for wake_word in WAKE_WORDS):
                 active = True
                 waiting_for_response = True
@@ -223,9 +230,7 @@ def main():
                 memory = add_to_memory_conversation(memory, "jarvis", "Yes sir?")
                 continue
 
-            # If active, process all input
             if active:
-                # Check for sleep/deactivation phrases
                 if any(phrase in user_input.lower() for phrase in SLEEP_PHRASES):
                     if speak("Understood. I'm going to sleep now."):
                         add_to_memory_conversation(memory, "jarvis", "Going to sleep.")
@@ -233,7 +238,6 @@ def main():
                         waiting_for_response = False
                     continue
 
-                # Process memory commands
                 if user_input.lower().startswith("remember"):
                     try:
                         _, fact = user_input.split("remember", 1)
@@ -247,9 +251,9 @@ def main():
                     except Exception:
                         pass
 
-                # Process normal command
                 memory = add_to_memory_conversation(memory, "user", user_input)
                 response = get_ai_response(user_input, memory)
+                response = clean_response(response)
                 memory = add_to_memory_conversation(memory, "jarvis", response)
                 speak(response)
 
