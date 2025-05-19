@@ -4,15 +4,11 @@ import sys
 import json
 import platform
 import keyboard
-from typing import Union, Any, Dict
+from typing import Union, Dict
 import pyttsx3
 from google import genai
 from google.genai import types
 import pydotenv
-from gtts import gTTS
-from playsound import playsound
-import io
-import pygame
 import datetime
 import speech_recognition as sr
 import threading
@@ -134,7 +130,6 @@ def speak(text):
         should_stop = False
         return False
 
-
 def get_ai_response(q: str, memory: Dict) -> Union[str, None]:
     conversation_context = ""
     for entry in memory["conversations"]:
@@ -171,8 +166,6 @@ def restart():
     python = sys.executable
     os.execv(python, [python] + sys.argv)
 
-import re
-
 def clean_response(text):
     # Remove code blocks (triple backticks)
     text = re.sub(r"``````", "", text)
@@ -191,6 +184,14 @@ def clean_response(text):
     # Collapse multiple spaces
     text = re.sub(r' +', ' ', text)
     return text.strip()
+
+# --- NEW: Source Code Reading Function ---
+def read_source_code(file_path="main.py"):
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            return f.read()
+    except Exception as e:
+        return f"Error reading source code: {e}"
 
 def main():
     print("Jarvis is always listening. Just speak your command.")
@@ -225,11 +226,28 @@ def main():
                 except Exception:
                     pass
 
+            # --- NEW: Source Code Q&A ---
+            if (
+                "source code" in user_input.lower() or
+                "your code" in user_input.lower() or
+                "explain your code" in user_input.lower()
+            ):
+                source_code = read_source_code("main.py")  # Change to your script filename if needed
+                prompt = (
+                    f"This is my source code:\n{source_code}\n\n"
+                    f"User question: {user_input}\n"
+                    "Please answer or explain based on the code above."
+                )
+                response = get_ai_response(prompt, memory)
+                response = clean_response(response)
+                memory = add_to_memory_conversation(memory, "jarvis", response)
+                speak(response)
+                continue
+
             response = get_ai_response(user_input, memory)
             response = clean_response(response)
             memory = add_to_memory_conversation(memory, "jarvis", response)
             speak(response)
-
 
 if __name__ == "__main__":
     try:
