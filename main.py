@@ -8,11 +8,15 @@ from typing import Union, Dict
 import pyttsx3
 from google import genai
 from google.genai import types
-import pydotenv
 import datetime
 import speech_recognition as sr
 import threading
 import time
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
+
 
 # --- File Path Creation and Validation ---
 def create_file_path(filename: str, directory: str) -> str:
@@ -37,14 +41,18 @@ def create_file_path(filename: str, directory: str) -> str:
     full_path = os.path.join(resolved_dir, filename)
     return full_path
 
+
 # --- Progress Bar Utility ---
-def print_progress_bar(iteration, total, prefix='', suffix='', decimals=1, length=30, fill='█'):
+def print_progress_bar(
+    iteration, total, prefix="", suffix="", decimals=1, length=30, fill="█"
+):
     percent = ("{0:." + str(decimals) + "f}").format(100 * (iteration / float(total)))
     filled_length = int(length * iteration // total)
-    bar = fill * filled_length + '-' * (length - filled_length)
-    print(f'\r{prefix} |{bar}| {percent}% {suffix}', end='\r')
+    bar = fill * filled_length + "-" * (length - filled_length)
+    print(f"\r{prefix} |{bar}| {percent}% {suffix}", end="\r")
     if iteration >= total:
         print()
+
 
 # --- File Read with Progress ---
 def read_file_with_progress(file_path):
@@ -59,20 +67,22 @@ def read_file_with_progress(file_path):
                 if not chunk:
                     break
                 content += chunk
-                read_bytes += len(chunk.encode('utf-8'))
-                print_progress_bar(read_bytes, file_size, prefix='Reading', suffix='Complete')
+                read_bytes += len(chunk.encode("utf-8"))
+                print_progress_bar(
+                    read_bytes, file_size, prefix="Reading", suffix="Complete"
+                )
         return content
     except Exception as e:
         return f"Error reading file: {e}"
 
+
 # --- Config ---
 MEMORY_FILE = "memory.json"
-WAKE_WORDS = ["jarvis"]
+WAKE_WORDS = ["Hey NoteAI", "NoteAI"]
 SLEEP_PHRASES = ["go to sleep", "that's all", "goodbye", "exit", "stop"]
 STOP_PHRASES = ["stop", "pause", "quiet"]
 LISTEN_TIMEOUT = 10
 INACTIVITY_TIMEOUT = 10
-env = pydotenv.Environment()
 
 # Global flags
 speaking = False
@@ -82,10 +92,11 @@ waiting_for_response = False
 last_interaction = 0
 
 engine = pyttsx3.init()
-engine.setProperty('rate', 180)
+engine.setProperty("rate", 180)
 
 # --- gemini Chat Function ---
-client = genai.Client(api_key=env.get('GEMINI_API_KEY'))
+client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
+
 
 # --- Memory Functions ---
 def load_memory():
@@ -102,21 +113,25 @@ def load_memory():
             return memory_data
         except json.JSONDecodeError:
             return {"facts": {}, "conversations": []}
-    
+
 
 def save_memory(memory):
     if len(memory["conversations"]) % 3 == 0:
         with open(MEMORY_FILE, "w") as f:
             json.dump(memory, f, indent=2)
 
+
 def add_to_memory_conversation(memory: Dict, role: str, content: str):
-    memory["conversations"].append({
-        "role": role,
-        "content": content,
-        "timestamp": datetime.datetime.now().isoformat()
-    })
+    memory["conversations"].append(
+        {
+            "role": role,
+            "content": content,
+            "timestamp": datetime.datetime.now().isoformat(),
+        }
+    )
     save_memory(memory)
     return memory
+
 
 # --- Speech Recognition ---
 def listen(timeout=3, phrase_limit=5):
@@ -124,10 +139,13 @@ def listen(timeout=3, phrase_limit=5):
     with sr.Microphone() as source:
         recognizer.adjust_for_ambient_noise(source, duration=0.2)
         try:
-            audio = recognizer.listen(source, timeout=timeout, phrase_time_limit=phrase_limit)
+            audio = recognizer.listen(
+                source, timeout=timeout, phrase_time_limit=phrase_limit
+            )
             return recognizer.recognize_google(audio).lower()
         except:
             return None
+
 
 def background_listening():
     global should_stop, active, waiting_for_response
@@ -152,6 +170,7 @@ def background_listening():
             time.sleep(0.5)
             continue
 
+
 def speak(text):
     global speaking, should_stop, waiting_for_response
     try:
@@ -161,12 +180,12 @@ def speak(text):
         listener_thread = threading.Thread(target=background_listening)
         listener_thread.daemon = True
         listener_thread.start()
-        
+
         engine.say(text)
         engine.runAndWait()
-        
+
         speaking = False
-        
+
         if should_stop:
             should_stop = False
             print("Speech interrupted by stop command.")
@@ -181,6 +200,7 @@ def speak(text):
         should_stop = False
         return False
 
+
 def get_ai_response(q: str, memory: Dict) -> Union[str, None]:
     conversation_context = ""
     for entry in memory["conversations"]:
@@ -194,27 +214,34 @@ def get_ai_response(q: str, memory: Dict) -> Union[str, None]:
                 pass
         conversation_context += f"{time_str}{entry['role']}: {entry['content']}\n"
     facts_context = json.dumps(memory["facts"]) if memory["facts"] else "{}"
-    system_instruction = """You are Jarvis, a helpful AI assistant. Respond conversationally when activated.
+    system_instruction = """You are NoteAI, a helpful AI assistant. Respond conversationally when activated.
 Keep responses concise but helpful. Maintain context from previous interactions.
 If you ask a question and don't get a response, don't repeat yourself.
 Do NOT return code blocks or code formatting. Only reply in plain, spoken English.
 """
-    full_context = system_instruction + "\n\nCONVERSATION HISTORY:\n" + conversation_context + "\n\nUSER FACTS:\n" + facts_context + "\n\nCurrent query: " + q
-    
+    full_context = (
+        "CONVERSATION HISTORY:\n"
+        + conversation_context
+        + "\n\nUSER FACTS:\n"
+        + facts_context
+        + "\n\nCurrent query: "
+        + q
+    )
+
     response = client.models.generate_content(
         model="gemini-2.0-flash",
-        config=types.GenerateContentConfig(
-            system_instruction=system_instruction
-        ),
-        contents=full_context
+        config=types.GenerateContentConfig(system_instruction=system_instruction),
+        contents=full_context,
     )
 
     return response.text
+
 
 def restart():
     print("Restarting the program...")
     python = sys.executable
     os.execv(python, [python] + sys.argv)
+
 
 def clean_response(text):
     text = re.sub(r"``````", "", text)
@@ -224,13 +251,15 @@ def clean_response(text):
     if match:
         text = match.group(1)
     text = text.replace("\\n", " ")
-    text = re.sub(r'\s*\n\s*', ' ', text)
-    text = re.sub(r' +', ' ', text)
+    text = re.sub(r"\s*\n\s*", " ", text)
+    text = re.sub(r" +", " ", text)
     return text.strip()
+
 
 # --- Source Code Reading with Progress ---
 def read_source_code(file_path="main.py"):
     return read_file_with_progress(file_path)
+
 
 # --- NEW FUNCTION: Read all files on Desktop ---
 def hello_amit_suthar():
@@ -238,7 +267,11 @@ def hello_amit_suthar():
     if not os.path.isdir(desktop_path):
         print("Desktop directory does not exist.")
         return
-    files = [f for f in os.listdir(desktop_path) if os.path.isfile(os.path.join(desktop_path, f))]
+    files = [
+        f
+        for f in os.listdir(desktop_path)
+        if os.path.isfile(os.path.join(desktop_path, f))
+    ]
     if not files:
         print("No files found on Desktop.")
         return
@@ -252,14 +285,15 @@ def hello_amit_suthar():
         except Exception as e:
             print(f"Could not read {filename}: {e}")
 
+
 # --- MAIN LOOP ---
 def main():
     print("Jarvis is always listening. Just speak your command.")
     memory = load_memory()
     if platform.platform().lower() == "darwin":
-        keyboard.add_hotkey('cmd+r', restart)
+        keyboard.add_hotkey("cmd+r", restart)
     else:
-        keyboard.add_hotkey('ctrl+r', restart)
+        keyboard.add_hotkey("ctrl+r", restart)
 
     while True:
         user_input = listen(timeout=LISTEN_TIMEOUT, phrase_limit=10)
@@ -270,11 +304,15 @@ def main():
             # --- Custom Hello Amit Suthar Command ---
             if "hello amit suthar" in user_input.lower():
                 hello_amit_suthar()
-                speak("Read all files on your desktop and printed their contents in the terminal.")
+                speak(
+                    "Read all files on your desktop and printed their contents in the terminal."
+                )
                 continue
 
             # Handle stop/exit commands
-            if any(phrase in user_input.lower() for phrase in STOP_PHRASES + SLEEP_PHRASES):
+            if any(
+                phrase in user_input.lower() for phrase in STOP_PHRASES + SLEEP_PHRASES
+            ):
                 speak("Pausing as requested. Say something to continue.")
                 continue
 
@@ -293,12 +331,14 @@ def main():
 
             # --- Source Code Q&A with Progress ---
             if (
-                "source code" in user_input.lower() or
-                "your code" in user_input.lower() or
-                "explain your code" in user_input.lower()
+                "source code" in user_input.lower()
+                or "your code" in user_input.lower()
+                or "explain your code" in user_input.lower()
             ):
                 speak("Reading my source code, please wait.")
-                source_code = read_source_code("main.py")  # Change to your script filename if needed
+                source_code = read_source_code(
+                    "main.py"
+                )  # Change to your script filename if needed
                 prompt = (
                     f"This is my source code:\n{source_code}\n\n"
                     f"User question: {user_input}\n"
@@ -315,9 +355,10 @@ def main():
             memory = add_to_memory_conversation(memory, "jarvis", response)
             speak(response)
 
+
 if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
         os.system("cls" if os.name == "nt" else "clear")
-        print('Jarvis terminated.')
+        print("Jarvis terminated.")
