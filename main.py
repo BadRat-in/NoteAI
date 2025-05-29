@@ -14,9 +14,59 @@ import speech_recognition as sr
 import threading
 import time
 
+# --- File Path Creation and Validation ---
+def create_file_path(filename: str, directory: str) -> str:
+    special_dirs = {
+        "desktop": os.path.join(os.path.expanduser("~"), "Desktop"),
+        "documents": os.path.join(os.path.expanduser("~"), "Documents"),
+        "downloads": os.path.join(os.path.expanduser("~"), "Downloads"),
+    }
+    dir_key = directory.strip().lower()
+    resolved_dir = special_dirs.get(dir_key, directory)
+    resolved_dir = os.path.expandvars(os.path.expanduser(resolved_dir))
+    if not isinstance(resolved_dir, str) or not resolved_dir.strip():
+        return "Error: Directory must be a non-empty string."
+    if not os.path.isdir(resolved_dir):
+        return f"Error: Directory '{resolved_dir}' does not exist."
+    if not isinstance(filename, str) or not filename.strip():
+        return "Error: Filename must be a non-empty string."
+    if os.path.sep in filename or (os.path.altsep and os.path.altsep in filename):
+        return "Error: Filename should not contain path separators."
+    if re.search(r'[<>:"/\\|?*]', filename):
+        return "Error: Filename contains invalid characters."
+    full_path = os.path.join(resolved_dir, filename)
+    return full_path
+
+# --- Progress Bar Utility ---
+def print_progress_bar(iteration, total, prefix='', suffix='', decimals=1, length=30, fill='█'):
+    percent = ("{0:." + str(decimals) + "f}").format(100 * (iteration / float(total)))
+    filled_length = int(length * iteration // total)
+    bar = fill * filled_length + '-' * (length - filled_length)
+    print(f'\r{prefix} |{bar}| {percent}% {suffix}', end='\r')
+    if iteration >= total:
+        print()
+
+# --- File Read with Progress ---
+def read_file_with_progress(file_path):
+    try:
+        file_size = os.path.getsize(file_path)
+        chunk_size = 4096
+        content = ""
+        with open(file_path, "r", encoding="utf-8") as f:
+            read_bytes = 0
+            while True:
+                chunk = f.read(chunk_size)
+                if not chunk:
+                    break
+                content += chunk
+                read_bytes += len(chunk.encode('utf-8'))
+                print_progress_bar(read_bytes, file_size, prefix='Reading', suffix='Complete')
+        return content
+    except Exception as e:
+        return f"Error reading file: {e}"
+
 # --- Config ---
 MEMORY_FILE = "memory.json"
-MODEL = "gpt-4o"
 WAKE_WORDS = ["jarvis"]
 SLEEP_PHRASES = ["go to sleep", "that's all", "goodbye", "exit", "stop"]
 STOP_PHRASES = ["stop", "pause", "quiet"]
@@ -39,30 +89,31 @@ client = genai.Client(api_key=env.get('GEMINI_API_KEY'))
 
 # --- Memory Functions ---
 def load_memory():
-    if os.path.exists(MEMORY_FILE):
-        with open(MEMORY_FILE, "r") as f:
-            try:
-                memory_data = json.load(f)
-                if "facts" not in memory_data:
-                    memory_data["facts"] = {}
-                if "conversations" not in memory_data:
-                    memory_data["conversations"] = []
-                return memory_data
-            except json.JSONDecodeError:
-                return {"facts": {}, "conversations": []}
-    return {"facts": {}, "conversations": []}
+    if not os.path.exists(MEMORY_FILE):
+        return {"facts": {}, "conversations": []}
+
+    with open(MEMORY_FILE, "r") as f:
+        try:
+            memory_data = json.load(f)
+            if "facts" not in memory_data:
+                memory_data["facts"] = {}
+            if "conversations" not in memory_data:
+                memory_data["conversations"] = []
+            return memory_data
+        except json.JSONDecodeError:
+            return {"facts": {}, "conversations": []}
+    
 
 def save_memory(memory):
     if len(memory["conversations"]) % 3 == 0:
         with open(MEMORY_FILE, "w") as f:
-            json.dump(memory, f)
+            json.dump(memory, f, indent=2)
 
 def add_to_memory_conversation(memory: Dict, role: str, content: str):
-    timestamp = datetime.datetime.now().isoformat()
     memory["conversations"].append({
         "role": role,
         "content": content,
-        "timestamp": timestamp
+        "timestamp": datetime.datetime.now().isoformat()
     })
     save_memory(memory)
     return memory
@@ -142,7 +193,6 @@ def get_ai_response(q: str, memory: Dict) -> Union[str, None]:
             except ValueError:
                 pass
         conversation_context += f"{time_str}{entry['role']}: {entry['content']}\n"
-    
     facts_context = json.dumps(memory["facts"]) if memory["facts"] else "{}"
     system_instruction = """You are Jarvis, a helpful AI assistant. Respond conversationally when activated.
 Keep responses concise but helpful. Maintain context from previous interactions.
@@ -167,36 +217,45 @@ def restart():
     os.execv(python, [python] + sys.argv)
 
 def clean_response(text):
-    # Remove code blocks (triple backticks)
     text = re.sub(r"``````", "", text)
-    # Remove inline code (single backticks)
     text = re.sub(r"`([^`]*)`", r"\1", text)
-    # Remove tool_code or similar markers
     text = re.sub(r"\btool_code\b", "", text, flags=re.IGNORECASE)
-    # Extract content inside print("...") or print('...')
     match = re.search(r'print\(["\']([\s\S]+?)["\']\)', text)
     if match:
         text = match.group(1)
-    # Replace escaped newlines (\n) with space
     text = text.replace("\\n", " ")
-    # Replace real newlines with space
     text = re.sub(r'\s*\n\s*', ' ', text)
-    # Collapse multiple spaces
     text = re.sub(r' +', ' ', text)
     return text.strip()
 
-# --- NEW: Source Code Reading Function ---
+# --- Source Code Reading with Progress ---
 def read_source_code(file_path="main.py"):
-    try:
-        with open(file_path, "r", encoding="utf-8") as f:
-            return f.read()
-    except Exception as e:
-        return f"Error reading source code: {e}"
+    return read_file_with_progress(file_path)
 
+# --- NEW FUNCTION: Read all files on Desktop ---
+def hello_amit_suthar():
+    desktop_path = os.path.join(os.path.expanduser("~"), "Desktop")
+    if not os.path.isdir(desktop_path):
+        print("Desktop directory does not exist.")
+        return
+    files = [f for f in os.listdir(desktop_path) if os.path.isfile(os.path.join(desktop_path, f))]
+    if not files:
+        print("No files found on Desktop.")
+        return
+    print("Files on your Desktop:")
+    for filename in files:
+        file_path = os.path.join(desktop_path, filename)
+        print(f"\n--- {filename} ---")
+        try:
+            content = read_file_with_progress(file_path)
+            print(content)
+        except Exception as e:
+            print(f"Could not read {filename}: {e}")
+
+# --- MAIN LOOP ---
 def main():
     print("Jarvis is always listening. Just speak your command.")
     memory = load_memory()
-
     if platform.platform().lower() == "darwin":
         keyboard.add_hotkey('cmd+r', restart)
     else:
@@ -207,6 +266,12 @@ def main():
         if user_input:
             print("Recognized:", user_input)
             memory = add_to_memory_conversation(memory, "user", user_input)
+
+            # --- Custom Hello Amit Suthar Command ---
+            if "hello amit suthar" in user_input.lower():
+                hello_amit_suthar()
+                speak("Read all files on your desktop and printed their contents in the terminal.")
+                continue
 
             # Handle stop/exit commands
             if any(phrase in user_input.lower() for phrase in STOP_PHRASES + SLEEP_PHRASES):
@@ -226,12 +291,13 @@ def main():
                 except Exception:
                     pass
 
-            # --- NEW: Source Code Q&A ---
+            # --- Source Code Q&A with Progress ---
             if (
                 "source code" in user_input.lower() or
                 "your code" in user_input.lower() or
                 "explain your code" in user_input.lower()
             ):
+                speak("Reading my source code, please wait.")
                 source_code = read_source_code("main.py")  # Change to your script filename if needed
                 prompt = (
                     f"This is my source code:\n{source_code}\n\n"
